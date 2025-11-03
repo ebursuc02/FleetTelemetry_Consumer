@@ -1,0 +1,64 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.36603.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{02EA681E-C7D8-13C7-8484-4AC65E1B71E8}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{F90FB953-F221-4CB6-ADDB-9EDE6499464A}"
+	ProjectSection(SolutionItems) = preProject
+		docs\SHARED_CONTRACT.md = docs\SHARED_CONTRACT.md
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "data", "data", "{685F6D32-0B85-4F82-BC35-C99E4CF3120B}"
+	ProjectSection(SolutionItems) = preProject
+		data\telemetry_20251028_101045_V042.jsonl = data\telemetry_20251028_101045_V042.jsonl
+		data\telemetry_20251028_101045_V042.jsonl.meta.json = data\telemetry_20251028_101045_V042.jsonl.meta.json
+		data\telemetry_20251028_101245_V042.jsonl = data\telemetry_20251028_101245_V042.jsonl
+		data\telemetry_20251028_101245_V042.jsonl.meta.json = data\telemetry_20251028_101245_V042.jsonl.meta.json
+	EndProjectSection
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Telemetry.Application", "src\Telemetry.Application\Telemetry.Application.csproj", "{709590B2-526A-375D-B080-2AA5AAAE5F34}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Telemetry.Infrastructure", "src\Telemetry.Infrastructure\Telemetry.Infrastructure.csproj", "{872E9AFA-602D-47C3-6319-99CA8D4BA3CE}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Telemetry.Domain", "src\Telemetry.Domain\Telemetry.Domain.csproj", "{95336C27-1DFE-FF77-A70A-079B93ADB239}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Telemetry.Consumer", "src\Telemetry.Consumer\Telemetry.Consumer.csproj", "{D04C6839-BDF2-48E3-FA53-F57A39D090E2}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{709590B2-526A-375D-B080-2AA5AAAE5F34}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{709590B2-526A-375D-B080-2AA5AAAE5F34}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{709590B2-526A-375D-B080-2AA5AAAE5F34}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{709590B2-526A-375D-B080-2AA5AAAE5F34}.Release|Any CPU.Build.0 = Release|Any CPU
+		{872E9AFA-602D-47C3-6319-99CA8D4BA3CE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{872E9AFA-602D-47C3-6319-99CA8D4BA3CE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{872E9AFA-602D-47C3-6319-99CA8D4BA3CE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{872E9AFA-602D-47C3-6319-99CA8D4BA3CE}.Release|Any CPU.Build.0 = Release|Any CPU
+		{95336C27-1DFE-FF77-A70A-079B93ADB239}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{95336C27-1DFE-FF77-A70A-079B93ADB239}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{95336C27-1DFE-FF77-A70A-079B93ADB239}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{95336C27-1DFE-FF77-A70A-079B93ADB239}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D04C6839-BDF2-48E3-FA53-F57A39D090E2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D04C6839-BDF2-48E3-FA53-F57A39D090E2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D04C6839-BDF2-48E3-FA53-F57A39D090E2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D04C6839-BDF2-48E3-FA53-F57A39D090E2}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{709590B2-526A-375D-B080-2AA5AAAE5F34} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
+		{872E9AFA-602D-47C3-6319-99CA8D4BA3CE} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
+		{95336C27-1DFE-FF77-A70A-079B93ADB239} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
+		{D04C6839-BDF2-48E3-FA53-F57A39D090E2} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {F53BF343-605C-4670-A7ED-0B747A789B66}
+	EndGlobalSection
+EndGlobal
