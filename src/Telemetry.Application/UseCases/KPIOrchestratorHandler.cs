@@ -7,10 +7,10 @@ using Telemetry.Domain.Entities;
 
 namespace Telemetry.Application.UseCases;
 
-public sealed class Orchestrator(IStore store, IConfiguration cfg) : BackgroundService
+public sealed class KPIOrchestratorHandler(IStore store, IConfiguration cfg) : BackgroundService
 {
     private readonly TimeSpan Grace = TimeSpan.FromSeconds(1);
-    private readonly TimeSpan FlushInterval = TimeSpan.FromMinutes(10);
+    private readonly TimeSpan FlushInterval = TimeSpan.FromMinutes(2); // 2 minutes for demo
 
     private KpiRecord _kpi = new();
     private Sidecar _sidecar = new();
@@ -20,11 +20,14 @@ public sealed class Orchestrator(IStore store, IConfiguration cfg) : BackgroundS
     // flush helper
     private DateTime _lastFlushUtc = DateTime.MinValue;
 
+    // helper function
+    private static double R4(double v) => Math.Round(v, 4, MidpointRounding.AwayFromZero);
+
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         try
         {
-            await Task.Delay(1000, ct); // delay to allow inboxConsumer enqueue records
+            await Task.Delay(3000, ct); // delay to allow inboxConsumer enqueue records
 
             await RestoreSidecarAsync(ct);
 
@@ -87,7 +90,7 @@ public sealed class Orchestrator(IStore store, IConfiguration cfg) : BackgroundS
             var endOfDay = today == day ? DateTime.UtcNow : EndOfDayUtc(day);
             var drained = store.GetAndClearRange(_sidecar.LastProcessedUtc, endOfDay);
 
-            if (drained.Any())
+            if (!drained.Any())
             {
                 _sidecar.LastProcessedUtc = 
                     day == today ? DateTime.UtcNow : day.ToDateTime(TimeOnly.MinValue).AddDays(1);
@@ -110,7 +113,6 @@ public sealed class Orchestrator(IStore store, IConfiguration cfg) : BackgroundS
                engineSum = _kpi.EngineRpm * _kpi.EngineRecords,
                co2Sum = _kpi.EmisionCO2 * _kpi.Co2Records;
 
-        double maxFuel = double.MinValue, minFuel = double.MaxValue;
         int added = 0;
 
         foreach (var r in records)
@@ -118,35 +120,60 @@ public sealed class Orchestrator(IStore store, IConfiguration cfg) : BackgroundS
             added++;
 
             if (r.SpeedKmh is double s)
-            {
-                speedSum += s; _kpi.SpeedRecords++;
-                if (s > 0) _kpi.IsMoving = true;
+            {  
+                if (s > 0) { _kpi.IsMoving = true; speedSum += s; _kpi.SpeedRecords++; }
                 else if (_kpi.IsMoving) { _kpi.StopsCount++; _kpi.IsMoving = false; }
             }
             if (r.OilTempC is double o) { oilSum += o; _kpi.OilRecords++; }
             if (r.EngineRpm is double e) { engineSum += e; _kpi.EngineRecords++; }
-            if (r.EmisionCO2 is double c) { co2Sum += c; _kpi.Co2Records++; }
+            if (r.Co2 is double c) { co2Sum += c; _kpi.Co2Records++; }
 
-            if (r.FuelPct is double f)
-            {
-                if (f > maxFuel) maxFuel = f;
-                if (f < minFuel) minFuel = f;
-            }
-
-            if (r.CoolantTempC is double ct && ct > 90) _kpi.CoolantHighTemperatureCount++;
+            if (r.CoolantTempC is double ct && ct > 90) { _kpi.CoolantHighTemperatureCount++; }
 
             _sidecar.LastProcessedUtc = r.TsUtc > _sidecar.LastProcessedUtc ? r.TsUtc : _sidecar.LastProcessedUtc;
         }
 
         if (records.Any())
         {
+            var (available, value) = GetFuelConsumptionAverage(records);
+
             _kpi.RecordCount += added;
-            if (_kpi.SpeedRecords > 0) _kpi.Speed = speedSum / _kpi.SpeedRecords;
-            if (_kpi.OilRecords > 0) _kpi.OilTempC = oilSum / _kpi.OilRecords;
-            if (_kpi.Co2Records > 0) _kpi.EmisionCO2 = co2Sum / _kpi.Co2Records;
-            if (maxFuel >= minFuel) _kpi.FuelConsumption += (maxFuel - minFuel);
+            if (_kpi.SpeedRecords > 0) _kpi.Speed = R4(speedSum / _kpi.SpeedRecords);
+            if (_kpi.OilRecords > 0) _kpi.OilTempC = R4(oilSum / _kpi.OilRecords);
+            if (_kpi.Co2Records > 0) _kpi.EmisionCO2 = R4(co2Sum / _kpi.Co2Records);
+            if (_kpi.EngineRecords > 0) _kpi.EngineRpm = R4(engineSum / _kpi.EngineRecords);
+            if (available) _kpi.FuelConsumption = R4(value + _kpi.FuelConsumption);
         }
         else _sidecar.LastProcessedUtc = DateTime.UtcNow;
+        Console.WriteLine("Processed: " + records.Count());
+    }
+
+
+    private static (bool available, double value) GetFuelConsumptionAverage(IEnumerable<RecordDto> records)
+    {
+
+        double totalSum = 0;
+        int count = 0;
+        bool registered = false;
+
+        foreach (var vehRecs in records.GroupBy(r => r.VehicleId))
+        {
+            double maxFuel = double.MinValue, minFuel = double.MaxValue;
+            foreach (var r in vehRecs)
+            {
+                if (r.FuelPct is double f)
+                {
+                    if (f > maxFuel) maxFuel = f;
+                    if (f < minFuel) minFuel = f;
+                    registered = true;
+                }
+            }
+            if (maxFuel >= minFuel) totalSum += (maxFuel - minFuel);
+            count++;
+        }
+
+        if (!registered) return (false, 0.0);
+        return (true, totalSum / count);
     }
 
     // ------------------- persistence ------------------- //

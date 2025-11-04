@@ -9,5 +9,5 @@ public record RecordDto
     public double? CoolantTempC {  get; init; }
     public double? OilTempC { get; init; }
     public double? EngineRpm { get; init; }
-    public double? EmisionCO2 { get; init; }
+    public double? Co2 { get; init; }
 }

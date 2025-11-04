@@ -17,15 +17,14 @@ This contract defines:
 ## 1) Directory & Naming
 **Canonical layout (filesystem or bucket prefixes):**
 ```
-fleet_telemetry/
-  inbox/      # producers write here
-  archive/    # consumer moves processed files here (date-partitioned)
-  error/      # consumer moves rejected files here (+ .error.json)
+    inbox/      # producers write here
+    archive/    # consumer moves processed files here (date-partitioned)
+    error/      # consumer moves rejected files here (+ .error.json)
 ```
 
 **Final data filename:**
 ```
-telemetry_YYYYMMDD_HHMMSS_{vehicleId}.jsonl[.gz]
+telemetry_YYYYMMDD_HHMMSS_{vehicleId}.jsonl
 # example
 after-rename: telemetry_20251028_101045_V042.jsonl
 sidecar:      telemetry_20251028_101045_V042.jsonl.meta.json
@@ -76,7 +75,9 @@ Producers use **JSON Lines**.
     "speedKmh": {"type": ["number", "null"]},
     "fuelPct": {"type": ["number", "null"], "minimum": 0, "maximum": 100},
     "coolantTempC": {"type": ["number", "null"]},
-    "tripId": {"type": ["string", "null"]}
+    "oilTempC": {"type": ["number", "null"]},
+    "engineRpm": {"type": ["number", "null"]},
+    "co2": {"type": ["number", "null"]},
   },
   "additionalProperties": false
 }
@@ -118,14 +119,14 @@ Producers use **JSON Lines**.
 
 ## 5) Producer Obligations
 - **Atomicity:** temp write → same-dir rename to final → write sidecar (commit).
-- **Accuracy:** `recordCount` MUST equal actual lines (JSONL).
+- **Accuracy:** `recordCount` SHOULD equal actual lines (JSONL).
 - **Time:** `createdUtc` and data `tsUtc` MUST be UTC (suffix `Z`).
 
 ## 6) Consumer Obligations
 - Pairing: process only when **both** data and sidecar exist.
 - Checksum: recompute **SHA-256** of data; MUST match sidecar.
 - Idempotency: track processed pairs by `sha256`; skip on duplicates.
-- Streaming parse: no full-file loads; tolerate `.gz`.
+- Streaming parse: no full-file loads;
 - Archival: on success → move pair to `archive/yyyy/MM/dd/` (names unchanged).
 - Errors: on failure → move pair to `error/` with `{finalName}.error.json` detailing reason & when.
 
@@ -143,23 +144,6 @@ inbox/telemetry_20251028_101045_V042.jsonl.tmp  ← write
 → rename to final
 → write sidecar (commit)
 ```
-
----
-
-# Validator (C# .NET 8 Console)
-A tiny tool to help **producers** self-check and **consumers** gatekeep: verifies sidecar vs file (sha256 + recordCount) and basic format.
-
-## Usage
-```bash
-# build & run
-mkdir -p validator && cd validator
-dotnet new console -n SidecarValidator -f net8.0
-mv Program.cs SidecarValidator/Program.cs            # after you paste the code below
-cd SidecarValidator && dotnet run -- \
-  /path/file.jsonl.gz \
-  /path/file.jsonl.gz.meta.json
-```
-Exit codes: `0` ok, `1` bad args, `2` file missing, `3` sidecar invalid, `4` checksum mismatch, `5` count mismatch.
 
 ---
 

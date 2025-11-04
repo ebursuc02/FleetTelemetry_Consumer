@@ -10,11 +10,11 @@ public class FolderIngestSource : IIngestSource, IDisposable
     private readonly string _inbox;
     private readonly FileSystemWatcher _fileWatcher;
     private readonly BlockingCollection<string> _filesToProcess = [];
-    private readonly Timer _sweepTimer;
 
     public FolderIngestSource(string inbox)
     {
         _inbox = inbox;
+
         _fileWatcher = new FileSystemWatcher(_inbox)
         {
             Filter = "*.meta.json",
@@ -29,7 +29,7 @@ public class FolderIngestSource : IIngestSource, IDisposable
 
         AddMissedFiles();
 
-        _sweepTimer = new Timer(_ => SafeSweep(), null,
+        _ = new Timer(_ => SafeSweep(), null,
             dueTime: TimeSpan.FromSeconds(5),
             period: TimeSpan.FromSeconds(5));
     }
