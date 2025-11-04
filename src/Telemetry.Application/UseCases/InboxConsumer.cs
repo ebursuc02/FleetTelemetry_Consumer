@@ -20,45 +20,48 @@ public class InboxConsumer(IIngestSource ingest, IFileParser parser, IFileValida
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        await foreach (var fileRes in _ingest.DiscoverAsync(ct))
+        try
         {
-            var filePath = fileRes.Value!;
-            var sidecarPath = filePath + ".meta.json";
+            await foreach (var fileRes in _ingest.DiscoverAsync(ct))
+            {
+                var filePath = fileRes.Value!;
+                var sidecarPath = filePath + ".meta.json";
 
-            var fileCheckRes = await _validator.CheckAsync(filePath, ct);
-            var parseRes = ParseFileNameInfo(filePath);
+                var fileCheckRes = await _validator.CheckAsync(filePath, ct);
+                var parseRes = ParseFileNameInfo(filePath);
             
-            if (!fileCheckRes.Success || !parseRes.Success)
-            {
-                await _archiver.ErrorAsync(filePath, sidecarPath, fileCheckRes.Error ?? parseRes.Error!, ct);
-                continue;
-            }
-         
-            var dateTime = parseRes.Value!;
-            var encoding = fileCheckRes.Value!;
-
-            try
-            {
-                var archived = false;
-                await foreach (var recordRes in _parser.ParseAsync(filePath, encoding, ct))
+                if (!fileCheckRes.Success || !parseRes.Success)
                 {
-                    if (recordRes.Success)
-                        _storage.Add(recordRes.Value!);
-                    else
-                    {
-                        await _archiver.ErrorAsync(filePath, sidecarPath, recordRes.Error!, ct);
-                        archived = true;
-                        break;
-                    }
+                    await _archiver.ErrorAsync(filePath, sidecarPath, fileCheckRes.Error ?? parseRes.Error!, ct);
+                    continue;
                 }
-                if (!archived)
-                    await _archiver.ArchiveAsync(filePath, sidecarPath, dateTime.ToString("yyyy/MM/dd"), ct);
+         
+                var dateTime = parseRes.Value!;
+                var encoding = fileCheckRes.Value!;
+
+                try
+                {
+                    var archived = false;
+                    await foreach (var recordRes in _parser.ParseAsync(filePath, encoding, ct))
+                    {
+                        if (recordRes.Success)
+                            _storage.Add(recordRes.Value!);
+                        else
+                        {
+                            await _archiver.ErrorAsync(filePath, sidecarPath, recordRes.Error!, ct);
+                            archived = true;
+                            break;
+                        }
+                    }
+                    if (!archived)
+                        await _archiver.ArchiveAsync(filePath, sidecarPath, dateTime.ToString("yyyy/MM/dd"), ct);
+                }
+                catch (Exception ex)
+                {
+                    await _archiver.ErrorAsync(filePath, sidecarPath, ex.Message, ct);
+                }
             }
-            catch (Exception ex)
-            {
-                await _archiver.ErrorAsync(filePath, sidecarPath, ex.Message, ct);
-            }
-        }
+        } catch (OperationCanceledException) { return; }     
     }
 
     private static Result<DateTime> ParseFileNameInfo(string filePath)

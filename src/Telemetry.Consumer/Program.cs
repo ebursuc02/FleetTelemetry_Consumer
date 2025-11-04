@@ -4,12 +4,12 @@ using Telemetry.Infrastructure;
 
 var builder = Host.CreateApplicationBuilder(args);
 
-var inbox = builder.Configuration["Storage:Inbox"] ?? "C:\\telemetry\\inbox";
-var archive = builder.Configuration["Storage:Archive"] ?? "C:\\telemetry\\archive";
-var error = builder.Configuration["Storage:Error"] ?? "C:\\telemetry\\error";
+var inbox = builder.Configuration["Storage:Inbox"];
+var archive = builder.Configuration["Storage:Archive"];
+var error = builder.Configuration["Storage:Error"];
 
 builder.Services
-    .AddTelemetryInfrastructure(inbox, archive, error)
+    .AddTelemetryInfrastructure(inbox!, archive!, error!)
     .AddTelemetryApplication();
 
 await builder.Build().RunAsync();

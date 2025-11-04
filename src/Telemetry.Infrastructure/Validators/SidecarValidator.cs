@@ -8,6 +8,11 @@ namespace Telemetry.Infrastructure.Validators;
 
 public class SidecarValidator : IFileValidator<SidecarDto>
 {
+    private static readonly JsonSerializerOptions jsonSerializerOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+    };
+
     public async Task<Result<SidecarDto>> CheckAsync(string sidecarPath, CancellationToken ct)
     {
 
@@ -28,12 +33,7 @@ public class SidecarValidator : IFileValidator<SidecarDto>
 
             var sidecarJson = await streamReader.ReadToEndAsync(ct);
 
-            var jsonOptions = new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true,
-            };
-
-            var sidecar = JsonSerializer.Deserialize<SidecarDto>(sidecarJson, jsonOptions);
+            var sidecar = JsonSerializer.Deserialize<SidecarDto>(sidecarJson, jsonSerializerOptions);
 
             if (sidecar is null)
                 return Result<SidecarDto>.Fail($"Empty or invalid JSON in {Path.GetFileName(sidecarPath)}.");

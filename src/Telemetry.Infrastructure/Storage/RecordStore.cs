@@ -21,6 +21,9 @@ public class RecordStore : IStore
 
         while (records.TryPeek(out var record))
         {
+            // consume duplicate records 
+            if (record.TsUtc <= fromExclusiveUtc && records.TryDequeue(out var _)) continue;
+
             if (record.TsUtc <= toInclusiveUtc && record.TsUtc > fromExclusiveUtc)
             {
                 if (!records.TryDequeue(out var item)) break;

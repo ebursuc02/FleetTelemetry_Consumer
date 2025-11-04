@@ -17,31 +17,56 @@ public sealed class Orchestrator(IStore store, IConfiguration cfg) : BackgroundS
     private DateOnly _day = DateOnly.FromDateTime(DateTime.UtcNow);
     private readonly string _folder = cfg["Orchestrator:KpiFolder"]!;
 
-    // flush helpers
+    // flush helper
     private DateTime _lastFlushUtc = DateTime.MinValue;
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        await Task.Delay(1000, ct); // delay to allow inboxConsumer enqueue records
-
-        await RestoreSidecarAsync(ct);
-
-        if (_sidecar.LastProcessedUtc == default)
+        try
         {
-            var today = DateOnly.FromDateTime(DateTime.UtcNow);
-            _sidecar.LastProcessedUtc = new DateTime(today.Year, today.Month, today.Day, 0, 0, 0, DateTimeKind.Utc);
-        }
+            await Task.Delay(1000, ct); // delay to allow inboxConsumer enqueue records
 
-        await CatchUpProccessDaysAsync(ct);
-        await StoreSidecarAsync(ct);
+            await RestoreSidecarAsync(ct);
 
-        await DelayUntilNextMinuteAsync(Grace, ct);
-        while (!ct.IsCancellationRequested)
-        {
-            var recs = store.GetAndClearRange(_sidecar.LastProcessedUtc, DateTime.UtcNow);
-            AggregateKpi(recs);
-            await MaybeFlushAsync(ct);
+            if (_sidecar.LastProcessedUtc == default)
+            {
+                var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                _sidecar.LastProcessedUtc = new DateTime(today.Year, today.Month, today.Day, 0, 0, 0, DateTimeKind.Utc);
+            }
+
+            await CatchUpProccessDaysAsync(ct);
+            await StoreSidecarAsync(ct);
+
             await DelayUntilNextMinuteAsync(Grace, ct);
+            while (!ct.IsCancellationRequested)
+            {
+                var recs = store.GetAndClearRange(_sidecar.LastProcessedUtc, DateTime.UtcNow);
+                AggregateKpi(recs);
+                await MaybeFlushAsync(ct);
+                await DelayUntilNextMinuteAsync(Grace, ct);
+            }
+        }
+        catch (OperationCanceledException) when(ct.IsCancellationRequested)
+        {
+            // shutdown
+        }
+        finally
+        {
+            // fresh token to avoid instant cancel
+            using var shutdownCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            try
+            {
+                if (_sidecar.LastProcessedUtc == default)
+                    await RestoreSidecarAsync(shutdownCts.Token);
+                var remaining = store.GetAndClearRange(_sidecar.LastProcessedUtc, DateTime.UtcNow);
+                if (remaining.Any())
+                {
+                    AggregateKpi(remaining);
+                    await StoreKpiAsync(shutdownCts.Token);
+                    await StoreSidecarAsync(shutdownCts.Token);
+                }
+            }
+            catch (OperationCanceledException) { /* timed out while shutting down */ }
         }
     }
 
@@ -62,7 +87,7 @@ public sealed class Orchestrator(IStore store, IConfiguration cfg) : BackgroundS
             var endOfDay = today == day ? DateTime.UtcNow : EndOfDayUtc(day);
             var drained = store.GetAndClearRange(_sidecar.LastProcessedUtc, endOfDay);
 
-            if (drained.Count() == 0)
+            if (drained.Any())
             {
                 _sidecar.LastProcessedUtc = 
                     day == today ? DateTime.UtcNow : day.ToDateTime(TimeOnly.MinValue).AddDays(1);
@@ -71,7 +96,7 @@ public sealed class Orchestrator(IStore store, IConfiguration cfg) : BackgroundS
 
             AggregateKpi(drained);
 
-            await StoreKpiAsync();
+            await StoreKpiAsync(ct);
             await StoreSidecarAsync(ct);
         }
     }
@@ -113,7 +138,7 @@ public sealed class Orchestrator(IStore store, IConfiguration cfg) : BackgroundS
             _sidecar.LastProcessedUtc = r.TsUtc > _sidecar.LastProcessedUtc ? r.TsUtc : _sidecar.LastProcessedUtc;
         }
 
-        if (records.Count() > 0)
+        if (records.Any())
         {
             _kpi.RecordCount += added;
             if (_kpi.SpeedRecords > 0) _kpi.Speed = speedSum / _kpi.SpeedRecords;
@@ -142,12 +167,12 @@ public sealed class Orchestrator(IStore store, IConfiguration cfg) : BackgroundS
         catch { /* ignore */ }
     }
 
-    private async Task StoreKpiAsync()
+    private async Task StoreKpiAsync(CancellationToken ct)
     {
         var path = FilePathFor(_day);
         Directory.CreateDirectory(_folder);
         await using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
-        await JsonSerializer.SerializeAsync(fs, _kpi, SerializerOptions);
+        await JsonSerializer.SerializeAsync(fs, _kpi, SerializerOptions, ct);
     }
 
     private async Task RestoreSidecarAsync(CancellationToken ct)
@@ -178,7 +203,7 @@ public sealed class Orchestrator(IStore store, IConfiguration cfg) : BackgroundS
 
         if (timeBased)
         {
-            await StoreKpiAsync();
+            await StoreKpiAsync(ct);
             await StoreSidecarAsync(ct);
             _lastFlushUtc = DateTime.UtcNow;
         }

@@ -12,10 +12,14 @@ public class LocalArchiver(string archive, string error) : IArchiver
 
     public async Task ErrorAsync(string data, string sidecar, string reason, CancellationToken ct = default)
     {
-        var dest = Path.Combine(_error, DateTime.UtcNow.ToString("yyyy/MM/dd"));
-        await MovePair(data, sidecar, dest);
-        await File.WriteAllTextAsync(Path.Combine(dest, Path.GetFileName(data) + ".error.json"),
-            JsonSerializer.Serialize(new { reason, whenUtc = DateTime.UtcNow }), ct);
+        var dest = Path.Combine(_error, Path.GetFileNameWithoutExtension(data));
+        try
+        {
+            await MovePair(data, sidecar, dest);
+            await File.WriteAllTextAsync(Path.Combine(dest, Path.GetFileName(data) + ".error.json"),
+                JsonSerializer.Serialize(new { reason, whenUtc = DateTime.UtcNow }), ct);
+        }
+        catch { }       
     }
 
     private static Task MovePair(string data, string sidecar, string dest)

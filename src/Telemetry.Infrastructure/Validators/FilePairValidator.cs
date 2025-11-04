@@ -8,7 +8,7 @@ public class FilePairValidator(IHasher hasher) : IFileValidator<Encoding>
 {
     private const int BufferSize = 64 * 1024;
     private readonly IHasher _hasher = hasher;
-    private readonly SidecarValidator _sidecarValidator = new SidecarValidator();
+    private readonly SidecarValidator _sidecarValidator = new();
 
     public async Task<Result<Encoding>> CheckAsync(string filePath, CancellationToken ct)
     {
@@ -55,7 +55,7 @@ public class FilePairValidator(IHasher hasher) : IFileValidator<Encoding>
         int lastByte = -1;
 
         int n;
-        while ((n = await fileStream.ReadAsync(buf, 0, buf.Length, ct)) > 0)
+        while ((n = await fileStream.ReadAsync(buf, ct)) > 0)
         {
             for (int i = 0; i < n; i++)
             {

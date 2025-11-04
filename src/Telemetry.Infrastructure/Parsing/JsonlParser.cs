@@ -35,7 +35,7 @@ public sealed class JsonlsParser : IFileParser
 
         string? line;
 
-        while (!ct.IsCancellationRequested && (line = await streamReader.ReadLineAsync()) is not null)
+        while (!ct.IsCancellationRequested && (line = await streamReader.ReadLineAsync(ct)) is not null)
         {
             if (line.Length == 0) continue;
 

@@ -10,7 +10,7 @@ public class FolderIngestSource : IIngestSource, IDisposable
     private readonly string _inbox;
     private readonly FileSystemWatcher _fileWatcher;
     private readonly BlockingCollection<string> _filesToProcess = [];
-    private readonly SemaphoreSlim _signal = new(0);
+    private readonly Timer _sweepTimer;
 
     public FolderIngestSource(string inbox)
     {
@@ -28,6 +28,10 @@ public class FolderIngestSource : IIngestSource, IDisposable
         _fileWatcher.Renamed += OnSidecarEvent;
 
         AddMissedFiles();
+
+        _sweepTimer = new Timer(_ => SafeSweep(), null,
+            dueTime: TimeSpan.FromSeconds(5),
+            period: TimeSpan.FromSeconds(5));
     }
 
     public void OnSidecarEvent(object? s, FileSystemEventArgs args)
@@ -37,7 +41,6 @@ public class FolderIngestSource : IIngestSource, IDisposable
         if (Path.GetFileName(dataPath).EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) return;
 
         _filesToProcess.Add(dataPath);
-        _signal.Release();
     }
 
     public async IAsyncEnumerable<Result<string>> DiscoverAsync(
@@ -55,17 +58,26 @@ public class FolderIngestSource : IIngestSource, IDisposable
         }
     }
 
+    private void SafeSweep()
+    {
+        try { AddMissedFiles(); }
+        catch { }
+    }
+
     private void AddMissedFiles()
     {
         foreach (var data in Directory.EnumerateFiles(_inbox, "*.jsonl", SearchOption.TopDirectoryOnly))
         {
             if (Path.GetFileName(data).EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) continue;
-            if (File.Exists(data + ".meta.json")) { _filesToProcess.Add(data); _signal.Release(); }
+            if (File.Exists(data + ".meta.json")) 
+                _filesToProcess.Add(data);
         }
     }
 
     public void Dispose()
     {
+        GC.SuppressFinalize(this);
+
         _fileWatcher.EnableRaisingEvents = false;
 
         _fileWatcher.Created -= OnSidecarEvent;
@@ -73,7 +85,5 @@ public class FolderIngestSource : IIngestSource, IDisposable
         _fileWatcher.Renamed -= OnSidecarEvent;
 
         _fileWatcher.Dispose();
-
-        _signal.Dispose();
     }
 }
