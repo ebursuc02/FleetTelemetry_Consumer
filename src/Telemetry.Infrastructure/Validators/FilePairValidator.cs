@@ -1,47 +1,43 @@
-﻿using System.Text;
+﻿using FluentResults;
 using Telemetry.Application.Abstractions;
-using Telemetry.Application.Results;
+using Telemetry.Application.DTOs;
 
 namespace Telemetry.Infrastructure.Validators;
 
-public class FilePairValidator(IHasher hasher) : IFileValidator<Encoding>
+public class FilePairValidator(IHasher hasher) : IFileValidator<SidecarDto>
 {
     private const int BufferSize = 64 * 1024;
     private readonly IHasher _hasher = hasher;
     private readonly SidecarValidator _sidecarValidator = new();
 
-    public async Task<Result<Encoding>> CheckAsync(string filePath, CancellationToken ct)
+
+    // TODO: refactoring
+    public async Task<Result<SidecarDto>> CheckAsync(string filePath, CancellationToken ct)
     {
         if (!File.Exists(filePath))
-            return Result<Encoding>.Fail($"File not found: {Path.GetFileName(filePath)}.");
+            return Result.Fail($"File not found: {Path.GetFileName(filePath)}.");
 
         var sidecarPath = filePath + ".meta.json";
 
         var sidecarCheckResult = await _sidecarValidator.CheckAsync(sidecarPath, ct);
 
-        if (!sidecarCheckResult.Success)
-            return Result<Encoding>.Fail(sidecarCheckResult.Error ?? $"Sidecar check aborted for: {filePath}.");
+        if (sidecarCheckResult.IsFailed)
+            return sidecarCheckResult;
 
         var sidecarDto = sidecarCheckResult.Value!;
 
         if (sidecarDto.Sha256.Length == 0)
-            return Result<Encoding>.Fail($"Sha not provided for: {Path.GetFileName(filePath)}.");
+            return Result.Fail($"Sha not provided for: {Path.GetFileName(filePath)}.");
 
         var actualSha = _hasher.ComputeHex(filePath);
         if (!actualSha.Equals(sidecarDto.Sha256, StringComparison.OrdinalIgnoreCase))
-            return Result<Encoding>.Fail($"Checksum mismatch for {Path.GetFileName(filePath)} (expected {sidecarDto.Sha256}, got {actualSha}).");
-
+            return Result.Fail($"Checksum mismatch for {Path.GetFileName(filePath)} (expected {sidecarDto.Sha256}, got {actualSha}).");
 
         var actualCount = await CountLinesAsync(filePath, ct);
         if (sidecarDto.RecordCount == 0 || sidecarDto.RecordCount != actualCount)
-            return Result<Encoding>.Fail($"Record count mismatch for {Path.GetFileName(filePath)} (expected {sidecarDto.RecordCount}, got {actualCount}).");
+            return Result.Fail($"Record count mismatch for {Path.GetFileName(filePath)} (expected {sidecarDto.RecordCount}, got {actualCount}).");
 
-
-        if (string.IsNullOrEmpty(sidecarDto.Encoding))
-            return Result<Encoding>.Fail($"Encoding nor procided for: {Path.GetFileName(filePath)}.");
-
-        var encoding = Encoding.GetEncoding(sidecarDto.Encoding, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback);
-        return Result<Encoding>.Ok(encoding);
+        return sidecarDto;
     }
 
     private static async Task<long> CountLinesAsync(string path, CancellationToken ct)

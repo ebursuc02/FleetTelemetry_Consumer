@@ -1,8 +1,8 @@
-﻿using System.Text;
+﻿using FluentResults;
+using System.Text;
 using System.Text.Json;
 using Telemetry.Application.Abstractions;
 using Telemetry.Application.DTOs;
-using Telemetry.Application.Results;
 
 namespace Telemetry.Infrastructure.Validators;
 
@@ -17,7 +17,7 @@ public class SidecarValidator : IFileValidator<SidecarDto>
     {
 
         if (!File.Exists(sidecarPath))
-            return Result<SidecarDto>.Fail($"File not found: {Path.GetFileName(sidecarPath)}.");
+            return Result.Fail($"File not found: {Path.GetFileName(sidecarPath)}.");
 
         try
         {
@@ -36,17 +36,17 @@ public class SidecarValidator : IFileValidator<SidecarDto>
             var sidecar = JsonSerializer.Deserialize<SidecarDto>(sidecarJson, jsonSerializerOptions);
 
             if (sidecar is null)
-                return Result<SidecarDto>.Fail($"Empty or invalid JSON in {Path.GetFileName(sidecarPath)}.");
+                return Result.Fail($"Empty or invalid JSON in {Path.GetFileName(sidecarPath)}.");
 
-            return Result<SidecarDto>.Ok(sidecar!);
+            return sidecar!;
         }
         catch (JsonException ex)
         {
-            return Result<SidecarDto>.Fail($"Error while parsing {Path.GetFileName(sidecarPath)}: {ex.Message}.");
+            return Result.Fail($"Error while parsing {Path.GetFileName(sidecarPath)}: {ex.Message}.");
         }
         catch (OperationCanceledException)
         {
-            return Result<SidecarDto>.Fail($"Operation canceled.");
+            return Result.Fail($"Operation canceled.");
         }
     }
 }

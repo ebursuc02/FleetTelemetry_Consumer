@@ -1,7 +1,7 @@
-﻿using System.Collections.Concurrent;
+﻿using FluentResults;
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using Telemetry.Application.Abstractions;
-using Telemetry.Application.Results;
 
 namespace Telemetry.Infrastructure.Ingest;
 
@@ -20,18 +20,12 @@ public class FolderIngestSource : IIngestSource, IDisposable
             Filter = "*.meta.json",
             EnableRaisingEvents = true,
             IncludeSubdirectories = false,
-            NotifyFilter = NotifyFilters.FileName | NotifyFilters.CreationTime | NotifyFilters.LastWrite
+            NotifyFilter = NotifyFilters.FileName
         };
 
-        _fileWatcher.Created += OnSidecarEvent;
-        _fileWatcher.Changed += OnSidecarEvent;
         _fileWatcher.Renamed += OnSidecarEvent;
 
         AddMissedFiles();
-
-        _ = new Timer(_ => SafeSweep(), null,
-            dueTime: TimeSpan.FromSeconds(5),
-            period: TimeSpan.FromSeconds(5));
     }
 
     public void OnSidecarEvent(object? s, FileSystemEventArgs args)
@@ -52,16 +46,10 @@ public class FolderIngestSource : IIngestSource, IDisposable
             if (!File.Exists(dataPath) || !File.Exists(sidecar))
                 continue;
 
-            yield return Result<string>.Ok(dataPath);
+            yield return dataPath;
 
             await Task.Yield();
         }
-    }
-
-    private void SafeSweep()
-    {
-        try { AddMissedFiles(); }
-        catch { }
     }
 
     private void AddMissedFiles()
