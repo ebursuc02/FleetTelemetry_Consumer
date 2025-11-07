@@ -1,11 +1,12 @@
 ﻿using FluentResults;
+using Microsoft.Extensions.Logging;
 using System.Text.Json;
 using Telemetry.Domain.Entities;
 using Telemetry.Domain.Repositories;
 
 namespace Telemetry.Infrastructure.Repositories;
 
-public class FileSidecarRepository(string sidecarFolder) : ISidecarRepository
+public class FileSidecarRepository(ILogger logger, string sidecarFolder) : ISidecarRepository
 {
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -25,14 +26,15 @@ public class FileSidecarRepository(string sidecarFolder) : ISidecarRepository
             return await JsonSerializer.DeserializeAsync<Sidecar>(fs, SerializerOptions, ct) ?? new Sidecar();
         }
         catch (OperationCanceledException) { throw; }
-        catch
+        catch (Exception ex) when (ex is JsonException or NotSupportedException or ArgumentNullException)
         {
+            logger.LogDebug("Parsing error occured, starting from a fresh object.");
             return new Sidecar();
         }
     }
 
 
-    public async Task<Result> SaveAsync(Sidecar state, CancellationToken ct)
+    public async Task SaveAsync(Sidecar state, CancellationToken ct)
     {
         var path = SidecarPath();
         Directory.CreateDirectory(sidecarFolder);
@@ -41,11 +43,12 @@ public class FileSidecarRepository(string sidecarFolder) : ISidecarRepository
         {
             await using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
             await JsonSerializer.SerializeAsync(fs, state, SerializerOptions, ct);
-            return Result.Ok();
         }
-        catch
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) when (ex is NotSupportedException or ArgumentNullException)
         {
-            return Result.Fail("Sidecar saving couldn't be done.");
+
+            logger.LogError("Sidecar saving couldn't be done.");
         }   
     }
 }

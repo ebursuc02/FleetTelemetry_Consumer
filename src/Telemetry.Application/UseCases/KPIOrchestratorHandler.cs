@@ -1,7 +1,7 @@
 ﻿using AutoMapper;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
-using System.Threading.Channels;
 using Telemetry.Application.Abstractions;
 using Telemetry.Application.DTOs;
 using Telemetry.Domain.Abstractions;
@@ -18,7 +18,8 @@ public sealed class KPIOrchestratorHandler(
     IFuelAccumulator fuel,
     IFlushPolicy flush,
     IClock clock,
-    IMapper mapper) : BackgroundService
+    IMapper mapper,
+    ILogger logger) : BackgroundService
 {
     private KpiRecord _kpi = new();
     private Sidecar _sidecar = new();
@@ -50,11 +51,15 @@ public sealed class KPIOrchestratorHandler(
                     await PersistAsync(ct);
             }
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) { /* normal shutdown */ }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            logger.LogDebug("Operation canceled, processing last records...");
+        }
         finally
         {
             using var shutdown = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            try { await PersistAsync(shutdown.Token); } catch { /* shudown timeout */ }
+            try { await PersistAsync(shutdown.Token); } 
+            catch { logger.LogDebug("Timeout, persistence aborted."); }
         }
     }
 
@@ -74,9 +79,7 @@ public sealed class KPIOrchestratorHandler(
                     continue;
 
                 break;
-            }
-                
-
+            }   
             _day = DateOnly.FromDateTime(_sidecar.LastProcessedUtc);
         }
   

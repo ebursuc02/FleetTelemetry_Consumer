@@ -68,8 +68,6 @@ public class FolderIngestSource : IIngestSource, IDisposable
 
         _fileWatcher.EnableRaisingEvents = false;
 
-        _fileWatcher.Created -= OnSidecarEvent;
-        _fileWatcher.Changed -= OnSidecarEvent;
         _fileWatcher.Renamed -= OnSidecarEvent;
 
         _fileWatcher.Dispose();

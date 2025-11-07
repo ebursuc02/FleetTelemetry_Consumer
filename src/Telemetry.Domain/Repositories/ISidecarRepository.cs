@@ -11,5 +11,5 @@ namespace Telemetry.Domain.Repositories;
 public interface ISidecarRepository
 {
     Task<Sidecar> LoadAsync(CancellationToken ct);
-    Task<Result> SaveAsync(Sidecar state, CancellationToken ct);
+    Task SaveAsync(Sidecar state, CancellationToken ct);
 }

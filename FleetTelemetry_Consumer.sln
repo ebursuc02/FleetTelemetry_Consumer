@@ -10,14 +10,6 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{F90FB953-F
 		docs\SHARED_CONTRACT.md = docs\SHARED_CONTRACT.md
 	EndProjectSection
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "data", "data", "{685F6D32-0B85-4F82-BC35-C99E4CF3120B}"
-	ProjectSection(SolutionItems) = preProject
-		data\telemetry_20251028_101045_V042.jsonl = data\telemetry_20251028_101045_V042.jsonl
-		data\telemetry_20251028_101045_V042.jsonl.meta.json = data\telemetry_20251028_101045_V042.jsonl.meta.json
-		data\telemetry_20251028_101245_V042.jsonl = data\telemetry_20251028_101245_V042.jsonl
-		data\telemetry_20251028_101245_V042.jsonl.meta.json = data\telemetry_20251028_101245_V042.jsonl.meta.json
-	EndProjectSection
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Telemetry.Application", "src\Telemetry.Application\Telemetry.Application.csproj", "{709590B2-526A-375D-B080-2AA5AAAE5F34}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Telemetry.Infrastructure", "src\Telemetry.Infrastructure\Telemetry.Infrastructure.csproj", "{872E9AFA-602D-47C3-6319-99CA8D4BA3CE}"

@@ -10,8 +10,8 @@ namespace Telemetry.Infrastructure.Parsing;
 
 public sealed class JsonlsParser(IConfiguration cfg) : IFileParser
 {
-    private readonly int _bufferSize = int.Parse(cfg["Parsing:BufferSize"]!);
-    private readonly int _maxFileOpenningAttempts = int.Parse(cfg["Parsing:MaxAttempts"]!);
+    private readonly int BufferSize = int.Parse(cfg["Parsing:BufferSize"]!);
+    private readonly int MaxFileOpenningAttempts = int.Parse(cfg["Parsing:MaxAttempts"]!);
 
     private static readonly UTF8Encoding Utf8NoBom = new(
         encoderShouldEmitUTF8Identifier: false,
@@ -25,7 +25,7 @@ public sealed class JsonlsParser(IConfiguration cfg) : IFileParser
 
     public async IAsyncEnumerable<Result<RecordDto>> ParseAsync(
     string filePath,
-    [EnumeratorCancellation] CancellationToken ct = default)
+    [EnumeratorCancellation] CancellationToken ct)
     {
         var open = await OpenReadWithRetryAsync(filePath, ct: ct);
         if (open.IsFailed)
@@ -55,7 +55,10 @@ public sealed class JsonlsParser(IConfiguration cfg) : IFileParser
         Stream stream,
         [EnumeratorCancellation] CancellationToken ct)
     {
-        using var reader = new StreamReader(stream, Utf8NoBom, detectEncodingFromByteOrderMarks: false, bufferSize: _bufferSize, leaveOpen: true);
+        using var reader = new StreamReader(stream, Utf8NoBom, 
+            detectEncodingFromByteOrderMarks: false, 
+            bufferSize: BufferSize, 
+            leaveOpen: true);
 
         string? line;
         var lineNo = 0;
@@ -92,11 +95,11 @@ public sealed class JsonlsParser(IConfiguration cfg) : IFileParser
 
     private async Task<Result<FileStream>> OpenReadWithRetryAsync(
         string path,
-        CancellationToken ct = default)
+        CancellationToken ct)
     {
         Exception? lastRetryable = null;
 
-        for (var attempt = 1; attempt <= _maxFileOpenningAttempts; attempt++)
+        for (var attempt = 1; attempt <= MaxFileOpenningAttempts; attempt++)
         {
             ct.ThrowIfCancellationRequested();
 
@@ -107,7 +110,7 @@ public sealed class JsonlsParser(IConfiguration cfg) : IFileParser
                     FileMode.Open,
                     FileAccess.Read,
                     FileShare.Read,
-                    _bufferSize,
+                    BufferSize,
                     FileOptions.Asynchronous | FileOptions.SequentialScan);
 
                 return fs;
@@ -115,8 +118,8 @@ public sealed class JsonlsParser(IConfiguration cfg) : IFileParser
             catch (FileNotFoundException e) { return Result.Fail($"File not found: '{path}'. {e.Message}"); }
             catch (DirectoryNotFoundException e) { return Result.Fail($"Directory not found for: '{path}'. {e.Message}"); }
             catch (PathTooLongException e) { return Result.Fail($"Path too long: '{path}'. {e.Message}"); }
-            catch (UnauthorizedAccessException e) when (attempt < _maxFileOpenningAttempts) { lastRetryable = e; }
-            catch (IOException e) when (attempt < _maxFileOpenningAttempts) { lastRetryable = e; }
+            catch (UnauthorizedAccessException e) when (attempt < MaxFileOpenningAttempts) { lastRetryable = e; }
+            catch (IOException e) when (attempt < MaxFileOpenningAttempts) { lastRetryable = e; }
             catch (Exception e) { return Result.Fail($"Unexpected error opening '{path}': {e.Message}"); }
 
             try { await Task.Delay(1000, ct); }
@@ -124,7 +127,7 @@ public sealed class JsonlsParser(IConfiguration cfg) : IFileParser
         }
 
         var suffix = lastRetryable is null ? "" : $" Last error: {lastRetryable.Message}";
-        return Result.Fail($"Could not open file '{path}' after {_maxFileOpenningAttempts} attempts.{suffix}");
+        return Result.Fail($"Could not open file '{path}' after {MaxFileOpenningAttempts} attempts.{suffix}");
     }
 
     private static string Trunc(string s, int max = 160) => s.Length <= max ? s : s[..max] + "…";
