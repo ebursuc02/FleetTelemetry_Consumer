@@ -1,8 +1,10 @@
-﻿using Microsoft.Extensions.Hosting;
+﻿using AutoMapper;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 using Telemetry.Application.Abstractions;
 using Telemetry.Application.DTOs;
+using Telemetry.Domain.Entities;
 
 namespace Telemetry.Application.UseCases;
 
@@ -11,7 +13,8 @@ public class InboxConsumer(
     IFileParser parser, 
     IFileValidator<SidecarDto> validator, 
     IProcessingStatusWriter statusWriter, 
-    BlockingCollection<RecordDto> storage,
+    BlockingCollection<Record> storage,
+    IMapper mapper,
     ILogger logger) : BackgroundService
 {
 
@@ -61,7 +64,7 @@ public class InboxConsumer(
                 {
                     if (recordRes.IsSuccess)
                     {
-                        storage.Add(recordRes.Value!, ct);
+                        storage.Add(mapper.Map<Record>(recordRes.Value!), ct);
                         added++;
                         producedRecords++;
                     }

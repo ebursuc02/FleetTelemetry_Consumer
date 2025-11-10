@@ -11,7 +11,7 @@ using Telemetry.Domain.Repositories;
 namespace Telemetry.Application.UseCases;
 
 public sealed class KPIOrchestratorHandler(
-    BlockingCollection<RecordDto> storage,
+    BlockingCollection<Record> storage,
     IKpiRepository kpiRepo,
     ISidecarRepository sidecarRepo,
     IStopAccumulator stops,

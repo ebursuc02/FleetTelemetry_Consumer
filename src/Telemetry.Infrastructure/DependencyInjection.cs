@@ -29,7 +29,5 @@ public static class DependencyInjection
            .AddSingleton<ISidecarRepository>(sp =>
                new FileSidecarRepository(
                    logger: sp.GetRequiredService<ILogger<FileSidecarRepository>>(),
-                   sidecarFolder: kpi))
-           .AddSingleton<IFuelAccumulator, FuelAccumulator>()
-           .AddSingleton<IStopAccumulator, StopAccumulator>();
+                   sidecarFolder: kpi));
 }
