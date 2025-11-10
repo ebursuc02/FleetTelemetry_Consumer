@@ -24,8 +24,7 @@ public class FileProcessingStatusWriter(ILogger logger) : IProcessingStatusWrite
     {
         sidecar.Processed = true;
         sidecar.ErrorReason = reason;
-        logger.LogDebug("\n---- Error file ----");
-        logger.LogDebug($"Reason: {reason}");
+        logger.LogDebug($"Error file. Reason: {reason}");
         await WriteJsonAtomicAsync(sidecarPath, sidecar, ct);
     }
 
@@ -36,15 +35,27 @@ public class FileProcessingStatusWriter(ILogger logger) : IProcessingStatusWrite
             await Task.Delay(1000, ct);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 
+            logger.LogDebug($"Writing JSON to: {path}");
             await using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite, 64 * 1024, useAsync: true);
             await JsonSerializer.SerializeAsync(fs, obj, JsonOpts, ct);
             await fs.FlushAsync(ct);
-            logger.LogDebug($"Proccessed: {path}");
-        } catch (IOException)
-        {
-            logger.LogError($"File {Path.GetFileName(path)} is accessed by another process.");
+
+            logger.LogDebug($"Processed: {path}");
         }
-        
+        catch (OperationCanceledException)
+        {
+            logger.LogDebug($"Write canceled for: {path}");
+            throw;
+        }
+        catch (IOException ex)
+        {
+            logger.LogWarning(ex, $"File {Path.GetFileName(path)} is accessed by another process.");
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, $"Failed to write JSON to: {path}");
+            throw;
+        }
     }
 
 }

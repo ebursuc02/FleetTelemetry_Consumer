@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 using Telemetry.Application.Abstractions;
 using Telemetry.Application.DTOs;
@@ -10,49 +11,93 @@ public class InboxConsumer(
     IFileParser parser, 
     IFileValidator<SidecarDto> validator, 
     IProcessingStatusWriter statusWriter, 
-    BlockingCollection<RecordDto> storage) : BackgroundService
+    BlockingCollection<RecordDto> storage,
+    ILogger logger) : BackgroundService
 {
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        // TODO: Refactoring needed
+        logger.LogInformation("InboxConsumer started");
+        int processedFiles = 0, failedFiles = 0, producedRecords = 0;
+
         try
         {
-            await foreach (var fileRes in ingest.DiscoverAsync(ct))
+            await foreach (var filePath in ingest.DiscoverAsync(ct))
             {
-                var filePath = fileRes.Value!;
+                if (ct.IsCancellationRequested) break;
+
                 var sidecarPath = filePath + ".meta.json";
 
-                // TODO: check separatly
                 var fileCheckRes = await validator.CheckAsync(filePath, ct);
             
                 if (fileCheckRes.IsFailed)
                 {
-                    if (File.Exists(sidecarPath))
-                    {
-                        await statusWriter.WriteErrorAsync(new SidecarDto() { ProducerName = "V001" }, sidecarPath, string.Join("; ", fileCheckRes.Errors.Select(e => e.Message)), ct);
-                        continue;
-                    }
+                    var producer = GetProducerFromFileName(filePath);
+                    var reason = string.Join("; ", fileCheckRes.Errors.Select(e => e.Message));
+                    logger.LogWarning($"Validation failed for {filePath}: {reason}");
+
+                    await statusWriter.WriteErrorAsync(
+                        new SidecarDto { ProducerName = producer },
+                        sidecarPath,
+                        reason,
+                        ct);
+
+                    failedFiles++;
+                    continue;
                 }
          
                 var sidecar = fileCheckRes.Value!;
-                if (sidecar.Processed) continue;
+                if (sidecar.Processed)
+                {
+                    logger.LogDebug($"Already processed, skipping: {filePath}");
+                    continue;
+                }
 
-                var archived = false;
+                logger.LogDebug($"Parsing: {filePath}");
+                var added = 0;
+                var marked = false;
+
                 await foreach (var recordRes in parser.ParseAsync(filePath, ct))
                 {
                     if (recordRes.IsSuccess)
+                    {
                         storage.Add(recordRes.Value!, ct);
+                        added++;
+                        producedRecords++;
+                    }
                     else
                     {
-                        await statusWriter.WriteErrorAsync(sidecar, sidecarPath, string.Join("; ", recordRes.Errors.Select(e => e.Message)), ct);
-                        archived = true;
+                        var reason = string.Join("; ", recordRes.Errors.Select(e => e.Message));
+                        logger.LogWarning($"Parsing error for {filePath}: {reason}");
+
+                        await statusWriter.WriteErrorAsync(sidecar, sidecarPath, reason, ct);
+                        marked = true;
+                        failedFiles++;
                         break;
                     }
                 }
-                if (!archived)
+                if (!marked)
                     await statusWriter.MarkProcessedAsync(sidecar, sidecarPath, ct);
             }
-        } catch (OperationCanceledException) { return; }     
+        }
+        catch (OperationCanceledException)
+        {
+            logger.LogInformation("InboxConsumer stopping (cancellation requested)");
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "InboxConsumer crashed with an unhandled exception");
+        }
+        finally
+        {
+            logger.LogInformation(
+                $"InboxConsumer stopped. Files processed: {processedFiles}, failed: {failedFiles}, records produced: {producedRecords}");
+        }
+    }
+
+    private static string GetProducerFromFileName(string filePath)
+    {
+        var name = Path.GetFileNameWithoutExtension(filePath);
+        return name.Length >= 4 ? name.Substring(name.Length - 4, 4) : name;
     }
 }

@@ -1,8 +1,10 @@
 ﻿using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Telemetry.Application;
 using Telemetry.Infrastructure;
 
 var builder = Host.CreateApplicationBuilder(args);
+builder.Logging.AddConsole().AddDebug();
 
 var inbox = builder.Configuration["Storage:Inbox"];
 var kpis = builder.Configuration["Storage:Kpis"];

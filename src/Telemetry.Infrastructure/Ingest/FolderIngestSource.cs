@@ -37,7 +37,7 @@ public class FolderIngestSource : IIngestSource, IDisposable
         _filesToProcess.Add(dataPath);
     }
 
-    public async IAsyncEnumerable<Result<string>> DiscoverAsync(
+    public async IAsyncEnumerable<string> DiscoverAsync(
     [EnumeratorCancellation] CancellationToken ct = default)
     {
         foreach (var dataPath in _filesToProcess.GetConsumingEnumerable(ct))
