@@ -15,7 +15,7 @@ public class InboxConsumer(
     IProcessingStatusWriter statusWriter, 
     BlockingCollection<Record> storage,
     IMapper mapper,
-    ILogger logger) : BackgroundService
+    ILogger<InboxConsumer> logger) : BackgroundService
 {
 
     protected override async Task ExecuteAsync(CancellationToken ct)

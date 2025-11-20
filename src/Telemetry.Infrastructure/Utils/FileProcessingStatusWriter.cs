@@ -5,7 +5,7 @@ using Telemetry.Application.DTOs;
 
 namespace Telemetry.Infrastructure.Utils;
 
-public class FileProcessingStatusWriter(ILogger logger) : IProcessingStatusWriter
+public class FileProcessingStatusWriter(ILogger<FileProcessingStatusWriter> logger) : IProcessingStatusWriter
 {
 
     private static readonly JsonSerializerOptions JsonOpts = new()
@@ -32,7 +32,7 @@ public class FileProcessingStatusWriter(ILogger logger) : IProcessingStatusWrite
     {
         try
         {
-            await Task.Delay(1000, ct);
+            await Task.Delay(2000, ct);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 
             logger.LogDebug($"Writing JSON to: {path}");

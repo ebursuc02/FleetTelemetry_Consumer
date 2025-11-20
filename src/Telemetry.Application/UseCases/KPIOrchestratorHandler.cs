@@ -3,7 +3,6 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 using Telemetry.Application.Abstractions;
-using Telemetry.Application.DTOs;
 using Telemetry.Domain.Abstractions;
 using Telemetry.Domain.Entities;
 using Telemetry.Domain.Repositories;
@@ -19,7 +18,7 @@ public sealed class KPIOrchestratorHandler(
     IFlushPolicy flush,
     IClock clock,
     IMapper mapper,
-    ILogger logger) : BackgroundService
+    ILogger<KPIOrchestratorHandler> logger) : BackgroundService
 {
     private KpiRecord _kpi = new();
     private Sidecar _sidecar = new();

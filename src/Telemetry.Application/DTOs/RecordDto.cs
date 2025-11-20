@@ -10,4 +10,5 @@ public record RecordDto
     public double? OilTempC { get; init; }
     public double? EngineRpm { get; init; }
     public double? Co2 { get; init; }
+    public double? BatteryVoltage { get; init; }
 }

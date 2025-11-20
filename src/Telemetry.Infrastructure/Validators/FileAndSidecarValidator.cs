@@ -32,7 +32,7 @@ public sealed class FileAndSidecarValidator(IConfiguration cfg) : IFileValidator
                 sidecarPath,
                 FileMode.Open,
                 FileAccess.Read,
-                FileShare.Read,
+                FileShare.ReadWrite,
                 8 * 1024,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
 
