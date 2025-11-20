@@ -1,0 +1,14 @@
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+obj/
+*.o
+*.obj
+.vs/
+archive/
+data/
+error/
+kpis/
+*.json

@@ -1,97 +1,106 @@
-﻿using Microsoft.Extensions.Hosting;
-using System.Text;
-using System.Text.RegularExpressions;
+﻿using AutoMapper;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using System.Collections.Concurrent;
 using Telemetry.Application.Abstractions;
-using Telemetry.Application.Results;
+using Telemetry.Application.DTOs;
+using Telemetry.Domain.Entities;
 
 namespace Telemetry.Application.UseCases;
 
-public class InboxConsumer(IIngestSource ingest, IFileParser parser, IFileValidator<Encoding> validator, IArchiver archiver, IStore storage) : BackgroundService
+public class InboxConsumer(
+    IIngestSource ingest, 
+    IFileParser parser, 
+    IFileValidator<SidecarDto> validator, 
+    IProcessingStatusWriter statusWriter, 
+    BlockingCollection<Record> storage,
+    IMapper mapper,
+    ILogger<InboxConsumer> logger) : BackgroundService
 {
-    private readonly IIngestSource _ingest = ingest;
-    private readonly IFileParser _parser = parser;
-    private readonly IFileValidator<Encoding> _validator = validator;
-    private readonly IArchiver _archiver = archiver;
-    private readonly IStore _storage = storage;
-
-    private static readonly Regex TelemetryFileRegex = new(
-        @"^telemetry_(?<date>\d{8})_(?<time>\d{6})_(?<vehicleId>V[0-9]+)$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
+        logger.LogInformation("InboxConsumer started");
+        int processedFiles = 0, failedFiles = 0, producedRecords = 0;
+
         try
         {
-            await foreach (var fileRes in _ingest.DiscoverAsync(ct))
+            await foreach (var filePath in ingest.DiscoverAsync(ct))
             {
-                var filePath = fileRes.Value!;
+                if (ct.IsCancellationRequested) break;
+
                 var sidecarPath = filePath + ".meta.json";
 
-                var fileCheckRes = await _validator.CheckAsync(filePath, ct);
-                var parseRes = ParseFileNameInfo(filePath);
+                var fileCheckRes = await validator.CheckAsync(filePath, ct);
             
-                if (!fileCheckRes.Success || !parseRes.Success)
+                if (fileCheckRes.IsFailed)
                 {
-                    await _archiver.ErrorAsync(filePath, sidecarPath, fileCheckRes.Error ?? parseRes.Error!, ct);
+                    var producer = GetProducerFromFileName(filePath);
+                    var reason = string.Join("; ", fileCheckRes.Errors.Select(e => e.Message));
+                    logger.LogWarning($"Validation failed for {filePath}: {reason}");
+
+                    await statusWriter.WriteErrorAsync(
+                        new SidecarDto { ProducerName = producer },
+                        sidecarPath,
+                        reason,
+                        ct);
+
+                    failedFiles++;
                     continue;
                 }
          
-                var dateTime = parseRes.Value!;
-                var encoding = fileCheckRes.Value!;
+                var sidecar = fileCheckRes.Value!;
+                if (sidecar.Processed)
+                {
+                    logger.LogDebug($"Already processed, skipping: {filePath}");
+                    continue;
+                }
 
-                try
+                logger.LogDebug($"Parsing: {filePath}");
+                var added = 0;
+                var marked = false;
+
+                await foreach (var recordRes in parser.ParseAsync(filePath, ct))
                 {
-                    var archived = false;
-                    await foreach (var recordRes in _parser.ParseAsync(filePath, encoding, ct))
+                    if (recordRes.IsSuccess)
                     {
-                        if (recordRes.Success)
-                            _storage.Add(recordRes.Value!);
-                        else
-                        {
-                            await _archiver.ErrorAsync(filePath, sidecarPath, recordRes.Error!, ct);
-                            archived = true;
-                            break;
-                        }
+                        storage.Add(mapper.Map<Record>(recordRes.Value!), ct);
+                        added++;
+                        producedRecords++;
                     }
-                    if (!archived)
-                        await _archiver.ArchiveAsync(filePath, sidecarPath, dateTime.ToString("yyyy/MM/dd"), ct);
+                    else
+                    {
+                        var reason = string.Join("; ", recordRes.Errors.Select(e => e.Message));
+                        logger.LogWarning($"Parsing error for {filePath}: {reason}");
+
+                        await statusWriter.WriteErrorAsync(sidecar, sidecarPath, reason, ct);
+                        marked = true;
+                        failedFiles++;
+                        break;
+                    }
                 }
-                catch (Exception ex)
-                {
-                    await _archiver.ErrorAsync(filePath, sidecarPath, ex.Message, ct);
-                }
+                if (!marked)
+                    await statusWriter.MarkProcessedAsync(sidecar, sidecarPath, ct);
             }
-        } catch (OperationCanceledException) { return; }     
+        }
+        catch (OperationCanceledException)
+        {
+            logger.LogInformation("InboxConsumer stopping (cancellation requested)");
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "InboxConsumer crashed with an unhandled exception");
+        }
+        finally
+        {
+            logger.LogInformation(
+                $"InboxConsumer stopped. Files processed: {processedFiles}, failed: {failedFiles}, records produced: {producedRecords}");
+        }
     }
 
-    private static Result<DateTime> ParseFileNameInfo(string filePath)
+    private static string GetProducerFromFileName(string filePath)
     {
         var name = Path.GetFileNameWithoutExtension(filePath);
-
-        var m = TelemetryFileRegex.Match(name);
-        if (!m.Success)
-            return Result<DateTime>.Fail($"Filename '{name}' does not match 'telemetry_yyyyMMdd_hhmmss_vehId'.");
-
-        return CheckDateAndTime(m.Groups["date"].Value, m.Groups["time"].Value);
+        return name.Length >= 4 ? name.Substring(name.Length - 4, 4) : name;
     }
-
-    private static Result<DateTime> CheckDateAndTime(string date, string time)
-    {
-        var year = int.Parse(date[..4]);
-        var month = int.Parse(date[4..6]);
-        var day = int.Parse(date[6..]);
-
-        if ((month < 1 || month > 12) || (day < 1 || day > 31))
-            return Result<DateTime>.Fail($"The filename date format is not correct: {year}/{month}/{day}.");
-
-        var hour = int.Parse(time[..2]);
-        var minute = int.Parse(time[2..4]);
-        var second = int.Parse(time[4..]);
-
-        if (hour > 23 || minute > 59 || second > 59)
-            return Result<DateTime>.Fail($"The filename time format is not correct: {hour}:{minute}:{second}.");
-
-        return Result<DateTime>.Ok(new DateTime(year, month, day, hour, minute, second));
-    }
-
 }

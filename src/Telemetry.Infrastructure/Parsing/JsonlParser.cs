@@ -1,60 +1,107 @@
-﻿using System.Text;
+﻿using FluentResults;
+using Microsoft.Extensions.Configuration;
+using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
-using Telemetry.Application.Results;
 using Telemetry.Application.Abstractions;
 using Telemetry.Application.DTOs;
 
 namespace Telemetry.Infrastructure.Parsing;
 
-public sealed class JsonlsParser : IFileParser
+public sealed class JsonlsParser(IConfiguration cfg) : IFileParser
 {
-    private const int BufferSize = 64 * 1024;
+    private readonly int BufferSize = int.Parse(cfg["Parsing:BufferSize"]!);
+    private readonly int MaxFileOpenningAttempts = int.Parse(cfg["Parsing:MaxAttempts"]!);
+
+    private static readonly UTF8Encoding Utf8NoBom = new(
+        encoderShouldEmitUTF8Identifier: false,
+        throwOnInvalidBytes: true);
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
 
     public async IAsyncEnumerable<Result<RecordDto>> ParseAsync(
-        string filePath,
-        Encoding encoding,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    string filePath,
+    [EnumeratorCancellation] CancellationToken ct)
     {
-        var jsonOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-
-        var openResult = await TryOpenForReadAsync(filePath, ct: ct);
-        if (!openResult.Success)
+        var open = await OpenReadWithRetryAsync(filePath, ct: ct);
+        if (open.IsFailed)
         {
-            yield return Result<RecordDto>.Fail(openResult.Error!);
+            yield return Result.Fail(open.Errors);
             yield break;
         }
 
-        await using var fileStream = openResult.Value!;
+        await using var stream = open.Value;
 
-        using var streamReader = new StreamReader(
-            fileStream,
-            encoding ?? new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true),
-            detectEncodingFromByteOrderMarks: false,
-            bufferSize: BufferSize,
-            leaveOpen: false);
+        await foreach (var res in ParseStreamAsync(stream, ct))
+            yield return res;
+
+        if (ct.IsCancellationRequested)
+            yield return Result.Fail("Operation was canceled.");
+    }
+
+    private async IAsyncEnumerable<Result<RecordDto>> ParseStreamAsync(
+        Stream stream,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        await foreach (var (line, lineNo) in ReadNonEmptyLines(stream, ct))
+            yield return DeserializeRecord(line, lineNo);
+    }
+
+    private async IAsyncEnumerable<(string line, int lineNo)> ReadNonEmptyLines(
+        Stream stream,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        using var reader = new StreamReader(stream, Utf8NoBom, 
+            detectEncodingFromByteOrderMarks: false, 
+            bufferSize: BufferSize, 
+            leaveOpen: true);
 
         string? line;
+        var lineNo = 0;
 
-        while (!ct.IsCancellationRequested && (line = await streamReader.ReadLineAsync(ct)) is not null)
+        while ((line = await reader.ReadLineAsync(ct)) is not null)
         {
-            if (line.Length == 0) continue;
+            lineNo++;
 
-            var dto = JsonSerializer.Deserialize<RecordDto>(line, jsonOptions);
-            if (dto is not null) yield return Result<RecordDto>.Ok(dto);
+            if (string.IsNullOrWhiteSpace(line))
+                continue;
+
+            yield return (line, lineNo);
         }
     }
 
-    private static async Task<Result<FileStream>> TryOpenForReadAsync(
-        string path,
-        int maxAttempts = 3,
-        int initialDelayMs = 100,
-        CancellationToken ct = default)
+    private static Result<RecordDto> DeserializeRecord(string line, int lineNo)
     {
-
-        for (int attempt = 1; attempt <= maxAttempts; attempt++)
+        try
         {
-            if (ct.IsCancellationRequested)
-                return Result<FileStream>.Fail("Operation was canceled.");
+            var dto = JsonSerializer.Deserialize<RecordDto>(line, JsonOptions);
+            return dto is null
+                ? Result.Fail($"Null JSON object at line {lineNo}. Line: {Trunc(line)}")
+                : Result.Ok(dto);
+        }
+        catch (JsonException jx)
+        {
+            return Result.Fail($"JSON parse error at line {lineNo}: {jx.Message}. Near: {Trunc(line)}");
+        }
+        catch (Exception ex)
+        {
+            return Result.Fail($"Unexpected error at line {lineNo}: {ex.Message}. Near: {Trunc(line)}");
+        }
+    }
+
+    private async Task<Result<FileStream>> OpenReadWithRetryAsync(
+        string path,
+        CancellationToken ct)
+    {
+        Exception? lastRetryable = null;
+
+        for (var attempt = 1; attempt <= MaxFileOpenningAttempts; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
 
             try
             {
@@ -66,33 +113,22 @@ public sealed class JsonlsParser : IFileParser
                     BufferSize,
                     FileOptions.Asynchronous | FileOptions.SequentialScan);
 
-                return Result<FileStream>.Ok(fs);
+                return fs;
             }
-            catch (UnauthorizedAccessException) when (attempt < maxAttempts)
-            {
-                // retry
-            }
-            catch (IOException) when (attempt < maxAttempts)
-            {
-                // retry
-            }
-            catch (Exception)
-            {
-                // unknown error
-                return Result<FileStream>.Fail("Unexpected error while opening the file.");
-            }
+            catch (FileNotFoundException e) { return Result.Fail($"File not found: '{path}'. {e.Message}"); }
+            catch (DirectoryNotFoundException e) { return Result.Fail($"Directory not found for: '{path}'. {e.Message}"); }
+            catch (PathTooLongException e) { return Result.Fail($"Path too long: '{path}'. {e.Message}"); }
+            catch (UnauthorizedAccessException e) when (attempt < MaxFileOpenningAttempts) { lastRetryable = e; }
+            catch (IOException e) when (attempt < MaxFileOpenningAttempts) { lastRetryable = e; }
+            catch (Exception e) { return Result.Fail($"Unexpected error opening '{path}': {e.Message}"); }
 
-            try
-            {
-                var delay = TimeSpan.FromMilliseconds(Math.Min(initialDelayMs * (1 << (attempt - 1)), 1000));
-                await Task.Delay(delay, ct);
-            }
-            catch (TaskCanceledException)
-            {
-                return Result<FileStream>.Fail("Operation was canceled.");
-            }
+            try { await Task.Delay(1000, ct); }
+            catch (TaskCanceledException) { return Result.Fail("Operation was canceled."); }
         }
 
-        return Result<FileStream>.Fail($"Could not open file '{path}' after {maxAttempts} attempts.");
+        var suffix = lastRetryable is null ? "" : $" Last error: {lastRetryable.Message}";
+        return Result.Fail($"Could not open file '{path}' after {MaxFileOpenningAttempts} attempts.{suffix}");
     }
+
+    private static string Trunc(string s, int max = 160) => s.Length <= max ? s : s[..max] + "…";
 }

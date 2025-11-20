@@ -1,23 +1,33 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
-using System.Text;
+using Microsoft.Extensions.Logging;
 using Telemetry.Application.Abstractions;
-using Telemetry.Infrastructure.Archiving;
-using Telemetry.Infrastructure.Hashing;
+using Telemetry.Application.DTOs;
+using Telemetry.Domain.Abstractions;
+using Telemetry.Domain.Accumulators;
+using Telemetry.Domain.Repositories;
 using Telemetry.Infrastructure.Ingest;
 using Telemetry.Infrastructure.Parsing;
-using Telemetry.Infrastructure.Storage;
+using Telemetry.Infrastructure.Repositories;
+using Telemetry.Infrastructure.Utils;
 using Telemetry.Infrastructure.Validators;
 
 namespace Telemetry.Infrastructure;
 
 public static class DependencyInjection
 {
-    public static IServiceCollection AddTelemetryInfrastructure(this IServiceCollection s, string inbox, string archive, string error)
+    public static IServiceCollection AddTelemetryInfrastructure(this IServiceCollection s, string inbox, string kpi)
         => s
            .AddSingleton<IIngestSource>(new FolderIngestSource(inbox))
-           .AddSingleton<IFileValidator<Encoding>, FilePairValidator>()
+           .AddSingleton<IFileValidator<SidecarDto>, FileAndSidecarValidator>()
            .AddSingleton<IFileParser, JsonlsParser>()
-           .AddSingleton<IArchiver>(new LocalArchiver(archive, error))
+           .AddSingleton<IProcessingStatusWriter, FileProcessingStatusWriter>()
            .AddSingleton<IHasher, Sha256Hasher>()
-           .AddSingleton<IStore, RecordStore>();
+           .AddSingleton<IKpiRepository>(sp =>
+               new FileKpiRepository(
+                   logger: sp.GetRequiredService<ILogger<FileKpiRepository>>(),
+                   folderPath: kpi))
+           .AddSingleton<ISidecarRepository>(sp =>
+               new FileSidecarRepository(
+                   logger: sp.GetRequiredService<ILogger<FileSidecarRepository>>(),
+                   sidecarFolder: kpi));
 }

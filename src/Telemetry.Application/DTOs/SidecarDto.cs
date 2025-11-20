@@ -1,10 +1,15 @@
-﻿namespace Telemetry.Application.DTOs;
+﻿using System.Globalization;
+
+namespace Telemetry.Application.DTOs;
 
 public class SidecarDto
 {
-    public required string Version { get; init; }
+    public string? Version { get; init; }
     public DateTime CreatedUtc { get; init; }
-    public required int RecordCount { get; init; }
-    public required string Sha256 { get; init; }
-    public required string Encoding { get; init; }
+    public int? RecordCount { get; init; }
+    public string? Sha256 { get; init; }
+    public string? Encoding { get; init; }
+    public bool Processed { get; set; } = false;
+    public string? ErrorReason { get; set; }
+    public string? ProducerName { get; init; }
 }

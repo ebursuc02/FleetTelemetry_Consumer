@@ -1,265 +1,143 @@
-﻿using Microsoft.Extensions.Configuration;
+﻿using AutoMapper;
 using Microsoft.Extensions.Hosting;
-using System.Text.Json;
+using Microsoft.Extensions.Logging;
+using System.Collections.Concurrent;
 using Telemetry.Application.Abstractions;
-using Telemetry.Application.DTOs;
+using Telemetry.Domain.Abstractions;
 using Telemetry.Domain.Entities;
+using Telemetry.Domain.Repositories;
 
 namespace Telemetry.Application.UseCases;
 
-public sealed class KPIOrchestratorHandler(IStore store, IConfiguration cfg) : BackgroundService
+public sealed class KPIOrchestratorHandler(
+    BlockingCollection<Record> storage,
+    IKpiRepository kpiRepo,
+    ISidecarRepository sidecarRepo,
+    IStopAccumulator stops,
+    IFuelAccumulator fuel,
+    IFlushPolicy flush,
+    IClock clock,
+    IMapper mapper,
+    ILogger<KPIOrchestratorHandler> logger) : BackgroundService
 {
-    private readonly TimeSpan Grace = TimeSpan.FromSeconds(1);
-    private readonly TimeSpan FlushInterval = TimeSpan.FromMinutes(2); // 2 minutes for demo
-
     private KpiRecord _kpi = new();
     private Sidecar _sidecar = new();
-    private DateOnly _day = DateOnly.FromDateTime(DateTime.UtcNow);
-    private readonly string _folder = cfg["Orchestrator:KpiFolder"]!;
-
-    // flush helper
-    private DateTime _lastFlushUtc = DateTime.MinValue;
-
-    // helper function
-    private static double R4(double v) => Math.Round(v, 4, MidpointRounding.AwayFromZero);
+    private DateOnly _day;
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
+        logger.LogInformation("KPIOrchestrator started");
+        await RestoreAsync(ct);
+
+        int processedSinceLastPersist = 0;
+        int totalProcessed = 0;
+        int daySwitches = 0;
+
         try
         {
-            await Task.Delay(3000, ct); // delay to allow inboxConsumer enqueue records
-
-            await RestoreSidecarAsync(ct);
-
-            if (_sidecar.LastProcessedUtc == default)
+            foreach (var r in storage.GetConsumingEnumerable(ct))
             {
-                var today = DateOnly.FromDateTime(DateTime.UtcNow);
-                _sidecar.LastProcessedUtc = new DateTime(today.Year, today.Month, today.Day, 0, 0, 0, DateTimeKind.Utc);
-            }
+                if (!string.IsNullOrEmpty(_sidecar.LastProcessedVeh) &&
+                    r.VehicleId == _sidecar.LastProcessedVeh &&
+                    r.TsUtc <= _sidecar.LastProcessedUtc)
+                {
+                    logger.LogDebug($"Skipping duplicate record {r.VehicleId} @ {r.TsUtc:o}");
+                    continue;
+                }
 
-            await CatchUpProccessDaysAsync(ct);
-            await StoreSidecarAsync(ct);
+                var recordDay = DateOnly.FromDateTime(r.TsUtc);
+                if (recordDay != _day)
+                {
+                    logger.LogInformation($"Day change: {_day:yyyy-MM-dd} -> {recordDay:yyyy-MM-dd}. Persisting current KPI...");
+                    await PersistAsync(ct);
+                    _day = recordDay;
+                    _kpi = await kpiRepo.LoadAsync(_day, ct);
+                    fuel.ResetForNewDay();
+                    processedSinceLastPersist = 0;
+                    daySwitches++;
+                }
 
-            await DelayUntilNextMinuteAsync(Grace, ct);
-            while (!ct.IsCancellationRequested)
-            {
-                var recs = store.GetAndClearRange(_sidecar.LastProcessedUtc, DateTime.UtcNow);
-                AggregateKpi(recs);
-                await MaybeFlushAsync(ct);
-                await DelayUntilNextMinuteAsync(Grace, ct);
+                // apply record to kpi
+                _kpi.Apply(mapper.Map<Record>(r), stops, fuel);
+                _sidecar.LastProcessedUtc = r.TsUtc;
+                _sidecar.LastProcessedVeh = r.VehicleId;
+
+                processedSinceLastPersist++;
+                totalProcessed++;
+
+                // flush if needed
+                if (flush.ShouldFlush(clock.UtcNow))
+                {
+                    logger.LogDebug($"Flush policy triggered. Persisting KPI for {_day:yyyy-MM-dd} after {processedSinceLastPersist} records...");
+                    await PersistAsync(ct);
+                    processedSinceLastPersist = 0;
+                }
             }
         }
-        catch (OperationCanceledException) when(ct.IsCancellationRequested)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            // shutdown
+            logger.LogInformation("KPIOrchestrator stopping (cancellation requested). Persisting last state...");
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "KPIOrchestrator crashed with an unhandled exception");
         }
         finally
         {
-            // fresh token to avoid instant cancel
-            using var shutdownCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            using var shutdown = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             try
             {
-                if (_sidecar.LastProcessedUtc == default)
-                    await RestoreSidecarAsync(shutdownCts.Token);
-                var remaining = store.GetAndClearRange(_sidecar.LastProcessedUtc, DateTime.UtcNow);
-                if (remaining.Any())
-                {
-                    AggregateKpi(remaining);
-                    await StoreKpiAsync(shutdownCts.Token);
-                    await StoreSidecarAsync(shutdownCts.Token);
-                }
+                await PersistAsync(shutdown.Token);
+                logger.LogInformation("Final persistence completed during shutdown window.");
             }
-            catch (OperationCanceledException) { /* timed out while shutting down */ }
-        }
-    }
-
-    // --------------- catch-up processing (multiple day backup)  --------------- //
-
-    private async Task CatchUpProccessDaysAsync(CancellationToken ct)
-    {
-        var startDay = DateOnly.FromDateTime(_sidecar.LastProcessedUtc);
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
-
-        for (var day = startDay; day <= today; day = day.AddDays(1))
-        {
-            _day = day;
-            _kpi = new KpiRecord();
-
-            await RestoreKpiAsync(day, ct);
-
-            var endOfDay = today == day ? DateTime.UtcNow : EndOfDayUtc(day);
-            var drained = store.GetAndClearRange(_sidecar.LastProcessedUtc, endOfDay);
-
-            if (!drained.Any())
+            catch
             {
-                _sidecar.LastProcessedUtc = 
-                    day == today ? DateTime.UtcNow : day.ToDateTime(TimeOnly.MinValue).AddDays(1);
-                continue;
+                logger.LogDebug("Shutdown persistence aborted (timeout or cancellation).");
             }
 
-            AggregateKpi(drained);
-
-            await StoreKpiAsync(ct);
-            await StoreSidecarAsync(ct);
+            logger.LogInformation($"KPIOrchestrator stopped. Total records applied: {totalProcessed}, day switches: {daySwitches}");
         }
     }
 
-    // ------------------- aggregation ------------------- //
-
-    private void AggregateKpi(IEnumerable<RecordDto> records)
+    private async Task RestoreAsync(CancellationToken ct)
     {
-        double speedSum = _kpi.Speed * _kpi.SpeedRecords,
-               oilSum = _kpi.OilTempC * _kpi.OilRecords,
-               engineSum = _kpi.EngineRpm * _kpi.EngineRecords,
-               co2Sum = _kpi.EmisionCO2 * _kpi.Co2Records;
+        logger.LogDebug("Restoring sidecar/KPI state...");
+        _sidecar = await sidecarRepo.LoadAsync(ct);
 
-        int added = 0;
-
-        foreach (var r in records)
+        if (string.IsNullOrEmpty(_sidecar.LastProcessedVeh))
         {
-            added++;
-
-            if (r.SpeedKmh is double s)
-            {  
-                if (s > 0) { _kpi.IsMoving = true; speedSum += s; _kpi.SpeedRecords++; }
-                else if (_kpi.IsMoving) { _kpi.StopsCount++; _kpi.IsMoving = false; }
-            }
-            if (r.OilTempC is double o) { oilSum += o; _kpi.OilRecords++; }
-            if (r.EngineRpm is double e) { engineSum += e; _kpi.EngineRecords++; }
-            if (r.Co2 is double c) { co2Sum += c; _kpi.Co2Records++; }
-
-            if (r.CoolantTempC is double ct && ct > 90) { _kpi.CoolantHighTemperatureCount++; }
-
-            _sidecar.LastProcessedUtc = r.TsUtc > _sidecar.LastProcessedUtc ? r.TsUtc : _sidecar.LastProcessedUtc;
+            _day = DateOnly.FromDateTime(DateTime.UtcNow);
+            logger.LogDebug($"No previous state found. Starting fresh at day {_day:yyyy-MM-dd}.");
+        }
+        else
+        {
+            _day = DateOnly.FromDateTime(_sidecar.LastProcessedUtc);
+            logger.LogDebug($"Restored last processed: veh={_sidecar.LastProcessedVeh}, ts={_sidecar.LastProcessedUtc:o}, day={_day:yyyy-MM-dd}.");
         }
 
-        if (records.Any())
-        {
-            var (available, value) = GetFuelConsumptionAverage(records);
-
-            _kpi.RecordCount += added;
-            if (_kpi.SpeedRecords > 0) _kpi.Speed = R4(speedSum / _kpi.SpeedRecords);
-            if (_kpi.OilRecords > 0) _kpi.OilTempC = R4(oilSum / _kpi.OilRecords);
-            if (_kpi.Co2Records > 0) _kpi.EmisionCO2 = R4(co2Sum / _kpi.Co2Records);
-            if (_kpi.EngineRecords > 0) _kpi.EngineRpm = R4(engineSum / _kpi.EngineRecords);
-            if (available) _kpi.FuelConsumption = R4(value + _kpi.FuelConsumption);
-        }
-        else _sidecar.LastProcessedUtc = DateTime.UtcNow;
-        Console.WriteLine("Processed: " + records.Count());
+        _kpi = await kpiRepo.LoadAsync(_day, ct);
+        logger.LogDebug($"Loaded KPI snapshot for {_day:yyyy-MM-dd}.");
     }
 
-
-    private static (bool available, double value) GetFuelConsumptionAverage(IEnumerable<RecordDto> records)
+    private async Task PersistAsync(CancellationToken ct)
     {
-
-        double totalSum = 0;
-        int count = 0;
-        bool registered = false;
-
-        foreach (var vehRecs in records.GroupBy(r => r.VehicleId))
-        {
-            double maxFuel = double.MinValue, minFuel = double.MaxValue;
-            foreach (var r in vehRecs)
-            {
-                if (r.FuelPct is double f)
-                {
-                    if (f > maxFuel) maxFuel = f;
-                    if (f < minFuel) minFuel = f;
-                    registered = true;
-                }
-            }
-            if (maxFuel >= minFuel) totalSum += (maxFuel - minFuel);
-            count++;
-        }
-
-        if (!registered) return (false, 0.0);
-        return (true, totalSum / count);
-    }
-
-    // ------------------- persistence ------------------- //
-
-    private async Task RestoreKpiAsync(DateOnly day, CancellationToken ct)
-    {
-        var path = FilePathFor(day);
-        if (!File.Exists(path)) return;
-
         try
         {
-            await using var fs = File.OpenRead(path);
-            var persisted = await JsonSerializer.DeserializeAsync<KpiRecord>(fs, SerializerOptions, ct);
-            if (persisted is null) return;
-
-            _kpi = persisted;
+            logger.LogDebug($"Persisting KPI({_day:yyyy-MM-dd}) and sidecar...");
+            await kpiRepo.SaveAsync(_day, _kpi, ct);
+            await sidecarRepo.SaveAsync(_sidecar, ct);
+            flush.MarkFlushed(clock.UtcNow);
+            logger.LogDebug("Persistence complete.");
         }
-        catch { /* ignore */ }
-    }
-
-    private async Task StoreKpiAsync(CancellationToken ct)
-    {
-        var path = FilePathFor(_day);
-        Directory.CreateDirectory(_folder);
-        await using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
-        await JsonSerializer.SerializeAsync(fs, _kpi, SerializerOptions, ct);
-    }
-
-    private async Task RestoreSidecarAsync(CancellationToken ct)
-    {
-        var path = SidecarPath();
-        if (!File.Exists(path)) { _sidecar = new Sidecar(); return; }
-
-        try
+        catch (OperationCanceledException)
         {
-            await using var fs = File.OpenRead(path);
-            _sidecar = (await JsonSerializer.DeserializeAsync<Sidecar>(fs, SerializerOptions, ct)) ?? new Sidecar();
+            logger.LogDebug("Persistence canceled.");
+            throw;
         }
-        catch { _sidecar = new Sidecar(); }
-    }
-
-    private async Task StoreSidecarAsync(CancellationToken ct)
-    {
-        var path = SidecarPath();
-        Directory.CreateDirectory(_folder);
-        await using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
-        await JsonSerializer.SerializeAsync(fs, _sidecar, SerializerOptions, ct);
-        _lastFlushUtc = DateTime.UtcNow;
-    }
-
-    private async Task MaybeFlushAsync(CancellationToken ct)
-    {
-        var timeBased = (DateTime.UtcNow - _lastFlushUtc) >= FlushInterval;
-
-        if (timeBased)
+        catch (Exception ex)
         {
-            await StoreKpiAsync(ct);
-            await StoreSidecarAsync(ct);
-            _lastFlushUtc = DateTime.UtcNow;
+            logger.LogError(ex, "Persistence failed.");
+            throw;
         }
     }
-
-    // ------------------- helper functions ------------------- //
-
-    private static DateTime EndOfDayUtc(DateOnly day)
-        => new DateTime(day.Year, day.Month, day.Day, 23, 59, 59, 999, DateTimeKind.Utc).AddTicks(9990); // 23:59:59.9999999
-
-    private string FilePathFor(DateOnly day) => Path.Combine(_folder, $"kpi_{day:yyyy-MM-dd}.json");
-    private string SidecarPath() => Path.Combine(_folder, $"kpi.sidecar.json");
-
-    private static readonly JsonSerializerOptions SerializerOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNameCaseInsensitive = true
-    };
-
-    private static async Task DelayUntilNextMinuteAsync(TimeSpan offset, CancellationToken ct)
-    {
-        var now = DateTime.UtcNow;
-        var next = TruncateToMinute(now).AddMinutes(1).Add(offset);
-        var delay = next - now;
-        if (delay < TimeSpan.Zero) delay = TimeSpan.Zero;
-        await Task.Delay(delay, ct);
-    }
-
-    private static DateTime TruncateToMinute(DateTime dtUtc)
-        => new(dtUtc.Year, dtUtc.Month, dtUtc.Day, dtUtc.Hour, dtUtc.Minute, 0, DateTimeKind.Utc);
-
 }

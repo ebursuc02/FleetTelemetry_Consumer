@@ -1,7 +1,7 @@
 ﻿using System.Security.Cryptography;
 using Telemetry.Application.Abstractions;
 
-namespace Telemetry.Infrastructure.Hashing;
+namespace Telemetry.Infrastructure.Utils;
 
 public class Sha256Hasher  : IHasher
 {

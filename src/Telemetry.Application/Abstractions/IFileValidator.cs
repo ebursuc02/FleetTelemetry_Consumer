@@ -1,5 +1,5 @@
-﻿using System.Text;
-using Telemetry.Application.Results;
+﻿using FluentResults;
+
 
 namespace Telemetry.Application.Abstractions;
 
